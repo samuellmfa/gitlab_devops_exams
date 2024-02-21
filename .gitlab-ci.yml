@@ -10,38 +10,35 @@ variables:
   NODEPORT_STAGING: 30001
   NODEPORT_PROD: 30002
   NODEPORT_QA: 30003
-  IMAGE_NAME: registry.gitlab.com/samalex2022/gitlab_devops_exams
+  IMAGE_NAME: registry.gitlab.com/Samjadezlex/gitlab_devops_exams
 image:
   name: "python:3.11-alpine"
   entrypoint: ["/bin/sh", "-c"]
 stages:
-  - pretest
   - test
   - build
   - run
   - stop_dev
+  - stop_staging
+  - stop_prod
   - stop_qa
   - deploy_dev
   - deploy_staging
-  - deploy_qa
   - deploy_prod
-pretest:
-  stage: pretest
-  image: python:3.10
-  script:
-    - python --version
-    - pip --version
-    - pip install pytest
-    - pytest --version
-    - echo "doing the complex stuff"
+  - deploy_qa
+
 test:
   stage: test
-  image: python:latest
   script:
+    - apt-get update -qy
+    - apt-get install -y python3
+    - python3 --version
+    - apt-get install -y python3-pip
     - pip3 install -r requirements.txt
-    - pip3 install pytest
     - cd app/
     - python3 -m pytest
+    - pytest --version
+    - echo "doing the complex stuff"
 gateway:
   stage: build
   image: docker:20.10
@@ -49,9 +46,9 @@ gateway:
     - docker:dind
   script:
     - echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER $CI_REGISTRY --password-stdin
-    - docker build -t registry.gitlab.com/samalex2022/gitlab_devops_exams/k-api-gateway:latest ./gateway
+    - docker build -t registry.gitlab.com/samjadezlex/gitlab_devops_exams/k-api-gateway:latest ./gateway
     - echo $CI_REGISTRY_IMAGE
-    - docker push registry.gitlab.com/samalex2022/gitlab_devops_exams/k-api-gateway:latest
+    - docker push registry.gitlab.com/samjadezlex/gitlab_devops_exams/k-api-gateway:latest
     #- docker push $IMAGE_NAME/k-api-gateway:latest
 orders:
   stage: build
@@ -60,9 +57,9 @@ orders:
     - docker:dind
   script:
     - echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER $CI_REGISTRY --password-stdin
-    - docker build -t registry.gitlab.com/samalex2022/gitlab_devops_exams/k-orders:latest ./orders
+    - docker build -t registry.gitlab.com/samjadezlex/gitlab_devops_exams/k-orders:latest ./orders
     - echo $CI_REGISTRY_IMAGE
-    - docker push registry.gitlab.com/samalex2022/gitlab_devops_exams/k-orders:latest
+    - docker push registry.gitlab.com/samjadezlex/gitlab_devops_exams/k-orders:latest
     #- docker push $IMAGE_NAME/k-api-gateway:latest
 users:
   stage: build
@@ -71,9 +68,9 @@ users:
     - docker:dind
   script:
     - echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER $CI_REGISTRY --password-stdin
-    - docker build -t registry.gitlab.com/samalex2022/gitlab_devops_exams/k-users:latest ./users
+    - docker build -t registry.gitlab.com/samjadezlex/gitlab_devops_exams/k-users:latest ./users
     - echo $CI_REGISTRY_IMAGE
-    - docker push registry.gitlab.com/samalex2022/gitlab_devops_exams/k-users:latest
+    - docker push registry.gitlab.com/samjadezlex/gitlab_devops_exams/k-users:latest
     #- docker push $IMAGE_NAME/k-api-gateway:latest
 run:
   stage: run
@@ -84,12 +81,12 @@ run:
     - docker --version
     - docker version
     - echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER $CI_REGISTRY --password-stdin
-    - docker pull registry.gitlab.com/samalex2022/gitlab_devops_exams/k-api-gateway:latest
-    - docker pull registry.gitlab.com/samalex2022/gitlab_devops_exams/k-orders:latest
-    - docker pull registry.gitlab.com/samalex2022/gitlab_devops_exams/k-users:latest
-    - docker run -d -p 8081:80 registry.gitlab.com/samalex2022/gitlab_devops_exams/k-api-gateway:latest
-    - docker run -d -p 8082:80 registry.gitlab.com/samalex2022/gitlab_devops_exams/k-orders:latest 
-    - docker run -d -p 8083:80 registry.gitlab.com/samalex2022/gitlab_devops_exams/k-users:latest
+    - docker pull registry.gitlab.com/samjadezlex/gitlab_devops_exams/k-api-gateway:latest
+    - docker pull registry.gitlab.com/samjadezlex/gitlab_devops_exams/k-orders:latest
+    - docker pull registry.gitlab.com/samjadezlex/gitlab_devops_exams/k-users:latest
+    - docker run -d -p 8081:80 registry.gitlab.com/samjadezlex/gitlab_devops_exams/k-api-gateway:latest
+    - docker run -d -p 8082:80 registry.gitlab.com/samjadezlex/gitlab_devops_exams/k-orders:latest
+    - docker run -d -p 8083:80 registry.gitlab.com/samjadezlex/gitlab_devops_exams/k-users:latest
     #- curl localhost
     #- docker stop k-api-gateway
     #- docker rm k-api-gateway
@@ -97,6 +94,28 @@ run:
     #- docker rm k-users
     #- docker stop k-orders
     #- docker rm k-orders
+stop_dev:
+  stage: deploy_dev
+  variables:
+    NAMESPACE: dev
+  when: manual
+  # Don't stop the "review" for master branch or tags,
+  # it is only for branches (so PRs (most of the time))
+  environment:
+    name: dev-$CI_BUILD_REF_NAME
+    action: stop
+  script:
+    - helm uninstall gateway-chart -n $NAMESPACE
+stop_staging:
+  stage: deploy_staging
+  variables:
+    NAMESPACE: staging
+  when: manual
+  environment:
+    name: dev-$CI_BUILD_REF_NAME
+    action: stop
+  script:
+    - helm uninstall gateway-chart -n $NAMESPACE
 deploy_dev:
   # Use the official docker image.
   image: docker:latest
@@ -112,19 +131,30 @@ deploy_dev:
   # Default branch leaves tag empty (= latest tag)
   # All other branches are tagged with the escaped branch name (commit ref slug)
   script:
-    - rm -Rf .kube
-    - mkdir .kube
-    - ls
-    - cat $KUBE_CONFIG > .kube/config
-    - cp fastapi/values.yaml values.yml
-    - cat values.yml
-    - sudo helm upgrade --install app fastapi/ --values=values.yml --namespace $NAMESPACE --set image. repository="$CI_REGISTRY_IMAGE" --set image.tag="$CI_COMMIT_SHORT_SHA" --set service.nodeport="$NODEPORT_DEV"
+  - mkdir -p $HOME/.helm
+  - cp /etc/kubernetes/pki/ca.crt $HOME/.helm/ca.crt
+  - rm -Rf .kube
+  - mkdir .kube
+  - export HELM_TLS_VERIFY=false 
+  - cat $KUBE_CONFIG > .kube/config
+  - cp gateway/values.yaml values.yml
+  - sudo helm upgrade --install app gateway/ \
+    --values=values.yml \
+    --namespace dev \
+    --set image.repository="$CI_REGISTRY_IMAGE" \
+    --set image.tag="$CI_COMMIT_SHORT_SHA" \
+    --set service.nodeport="$NODEPORT_DEV" \
+    --kubeconfig=$HOME/.kube/config \
+    --insecure-skip-tls-verify \
+    --tls --tls-ca-cert $HOME/.helm/ca.crt
+
+
 deploy_staging:
   # Use the official docker image.
   image: docker:latest
   environment:
-    name: dev-$CI_BUILD_REF_NAME
-    url: http://$IP_DEV:$NODEPORT_STAGING
+    name: staging-$CI_BUILD_REF_NAME
+    url: http://$IP_STAGING:$NODEPORT_STAGING
   stage: deploy_staging
   variables:
     NAMESPACE: staging
@@ -136,39 +166,16 @@ deploy_staging:
   script:
     - rm -Rf .kube
     - mkdir .kube
-    - ls
+    - export HELM_TLS_VERIFY=false 
     - cat $KUBE_CONFIG > .kube/config
-    - cp fastapi/values.yaml values.yml
-    - cat values.yml
-    - sudo helm upgrade --install app fastapi/ --values=values.yml --namespace $NAMESPACE --set image. repository="$CI_REGISTRY_IMAGE" --set image.tag="$CI_COMMIT_SHORT_SHA" --set service.nodeport="$NODEPORT_STAGING"
-deploy_qa:
-  # Use the official docker image.
-  image: docker:latest
-  environment:
-    name: dev-$CI_BUILD_REF_NAME
-    url: http://$IP_DEV:$NODEPORT_QA
-  stage: deploy_qa
-  variables:
-    NAMESPACE: qa
-
-  services:
-    - docker:dind
-  # Default branch leaves tag empty (= latest tag)
-  # All other branches are tagged with the escaped branch name (commit ref slug)
-  script:
-    - rm -Rf .kube
-    - mkdir .kube
-    - ls
-    - cat $KUBE_CONFIG > .kube/config
-    - cp fastapi/values.yaml values.yml
-    - cat values.yml
-    - sudo helm upgrade --install app fastapi/ --values=values.yml --namespace $NAMESPACE --set image. repository="$CI_REGISTRY_IMAGE" --set image.tag="$CI_COMMIT_SHORT_SHA" --set service.nodeport="$NODEPORT_QA"
+    - cp gateway/values.yaml values.yml
+    - sudo helm upgrade --install app gateway/ --values=values.yml --namespace staging --set image.repository="$CI_REGISTRY_IMAGE" --set image.tag="$CI_COMMIT_SHORT_SHA" --set service.nodeport=$NODEPORT_STAGING" --kubeconfig=$HOME/.kube/config --insecure-skip-tls-verify
 deploy_prod:
   # Use the official docker image.
   image: docker:latest
   environment:
-    name: dev-$CI_BUILD_REF_NAME
-    url: http://$IP_DEV:$NODEPORT_PROD
+    name: prod-$CI_BUILD_REF_NAME
+    url: http://$IP_PROD:$NODEPORT_PROD
   stage: deploy_prod
   variables:
     NAMESPACE: prod
@@ -180,9 +187,28 @@ deploy_prod:
   script:
     - rm -Rf .kube
     - mkdir .kube
-    - ls
+    - export HELM_TLS_VERIFY=false 
     - cat $KUBE_CONFIG > .kube/config
-    - cp fastapi/values.yaml values.yml
-    - cat values.yml
-    - sudo helm upgrade --install app fastapi/ --values=values.yml --namespace $NAMESPACE --set image. repository="$CI_REGISTRY_IMAGE" --set image.tag="$CI_COMMIT_SHORT_SHA" --set service.nodeport="$NODEPORT_PROD"
+    - cp gateway/values.yaml values.yml
+    - sudo helm upgrade --install app gateway/ --values=values.yml --namespace prod --set image.repository="$CI_REGISTRY_IMAGE" --set image.tag="$CI_COMMIT_SHORT_SHA" --set service.nodeport=$NODEPORT_PROD" --kubeconfig=$HOME/.kube/config --insecure-skip-tls-verify
+deploy_qa:
+  # Use the official docker image.
+  image: docker:latest
+  environment:
+    name: qa-$CI_BUILD_REF_NAME
+    url: http://$IP_QA:$NODEPORT_QA
+  stage: deploy_qa
+  variables:
+    NAMESPACE: qa
 
+  services:
+    - docker:dind
+  # Default branch leaves tag empty (= latest tag)
+  # All other branches are tagged with the escaped branch name (commit ref slug)
+  script:
+    - rm -Rf .kube
+    - mkdir .kube
+    - export HELM_TLS_VERIFY=false 
+    - cat $KUBE_CONFIG > .kube/config
+    - cp gateway/values.yaml values.yml
+    - sudo helm upgrade --install app gateway/ --values=values.yml --namespace qa --set image.repository="$CI_REGISTRY_IMAGE" --set image.tag="$CI_COMMIT_SHORT_SHA" --set service.nodeport=$NODEPORT_QA" --kubeconfig=$HOME/.kube/config --insecure-skip-tls-verify
